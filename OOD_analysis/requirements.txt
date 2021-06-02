@@ -1,0 +1,8 @@
+transformers==3.4
+numpy
+pandas
+scikit-learn
+scipy
+lime
+pdbpp
+

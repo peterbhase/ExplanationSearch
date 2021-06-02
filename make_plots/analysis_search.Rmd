@@ -1,0 +1,458 @@
+---
+title: ""
+author: ""
+date: ""
+output: pdf_document
+---
+
+```{r setup}
+library(tidyverse)
+library(collections)
+```
+
+```{r read data}
+data_name <- 'fever'
+# data_name <- 'esnli_flat'
+random_data_traj <- read_csv(sprintf('data/%s/random_masked_n500_search1000_all_trajectories.csv', data_name))
+SA_data <- read_csv(sprintf('data/%s/SA_masked_n500_search1000_all_trajectories.csv', data_name))
+ordered_data <- read_csv(sprintf('data/%s/budget750_LIME_masked_n500_steps250_all_trajectories.csv', data_name))
+
+```
+
+```{r custom facet scales}
+
+scale_override <- function(which, scale) {
+  if(!is.numeric(which) || (length(which) != 1) || (which %% 1 != 0)) {
+    stop("which must be an integer of length 1")
+  }
+  
+  if(is.null(scale$aesthetics) || !any(c("x", "y") %in% scale$aesthetics)) {
+    stop("scale must be an x or y position scale")
+  }
+  
+  structure(list(which = which, scale = scale), class = "scale_override")
+}
+
+CustomFacetWrap <- ggproto(
+  "CustomFacetWrap", FacetWrap,
+  init_scales = function(self, layout, x_scale = NULL, y_scale = NULL, params) {
+    # make the initial x, y scales list
+    scales <- ggproto_parent(FacetWrap, self)$init_scales(layout, x_scale, y_scale, params)
+    
+    if(is.null(params$scale_overrides)) return(scales)
+    
+    max_scale_x <- length(scales$x)
+    max_scale_y <- length(scales$y)
+    
+    # ... do some modification of the scales$x and scales$y here based on params$scale_overrides
+    for(scale_override in params$scale_overrides) {
+      which <- scale_override$which
+      scale <- scale_override$scale
+      
+      if("x" %in% scale$aesthetics) {
+        if(!is.null(scales$x)) {
+          if(which < 0 || which > max_scale_x) stop("Invalid index of x scale: ", which)
+          scales$x[[which]] <- scale$clone()
+        }
+      } else if("y" %in% scale$aesthetics) {
+        if(!is.null(scales$y)) {
+          if(which < 0 || which > max_scale_y) stop("Invalid index of y scale: ", which)
+          scales$y[[which]] <- scale$clone()
+        }
+      } else {
+        stop("Invalid scale")
+      }
+    }
+    
+    # return scales
+    scales
+  }
+)
+
+facet_wrap_custom <- function(..., scale_overrides = NULL) {
+  # take advantage of the sanitizing that happens in facet_wrap
+  facet_super <- facet_wrap(...)
+  
+  # sanitize scale overrides
+  if(inherits(scale_overrides, "scale_override")) {
+    scale_overrides <- list(scale_overrides)
+  } else if(!is.list(scale_overrides) || 
+            !all(vapply(scale_overrides, inherits, "scale_override", FUN.VALUE = logical(1)))) {
+    stop("scale_overrides must be a scale_override object or a list of scale_override objects")
+  }
+  
+  facet_super$params$scale_overrides <- scale_overrides
+  
+  ggproto(NULL, CustomFacetWrap,
+    shrink = facet_super$shrink,
+    params = facet_super$params
+  )
+}
+
+CustomFacetGrid <- ggproto(
+  "CustomFacetGrid", FacetGrid,
+  init_scales = function(self, layout, x_scale = NULL, y_scale = NULL, params) {
+    # make the initial x, y scales list
+    scales <- ggproto_parent(FacetGrid, self)$init_scales(layout, x_scale, y_scale, params)
+    
+    if(is.null(params$scale_overrides)) return(scales)
+    
+    max_scale_x <- length(scales$x)
+    max_scale_y <- length(scales$y)
+    
+    # ... do some modification of the scales$x and scales$y here based on params$scale_overrides
+    for(scale_override in params$scale_overrides) {
+      which <- scale_override$which
+      scale <- scale_override$scale
+      
+      if("x" %in% scale$aesthetics) {
+        if(!is.null(scales$x)) {
+          if(which < 0 || which > max_scale_x) stop("Invalid index of x scale: ", which)
+          scales$x[[which]] <- scale$clone()
+        }
+      } else if("y" %in% scale$aesthetics) {
+        if(!is.null(scales$y)) {
+          if(which < 0 || which > max_scale_y) stop("Invalid index of y scale: ", which)
+          scales$y[[which]] <- scale$clone()
+        }
+      } else {
+        stop("Invalid scale")
+      }
+    }
+    
+    # return scales
+    scales
+  }
+)
+
+facet_grid_custom <- function(..., scale_overrides = NULL) {
+  # take advantage of the sanitizing that happens in facet_wrap
+  facet_super <- facet_grid(...)
+  
+  # sanitize scale overrides
+  if(inherits(scale_overrides, "scale_override")) {
+    scale_overrides <- list(scale_overrides)
+  } else if(!is.list(scale_overrides) || 
+            !all(vapply(scale_overrides, inherits, "scale_override", FUN.VALUE = logical(1)))) {
+    stop("scale_overrides must be a scale_override object or a list of scale_override objects")
+  }
+  
+  facet_super$params$scale_overrides <- scale_overrides
+  
+  ggproto(NULL, CustomFacetGrid,
+    shrink = facet_super$shrink,
+    params = facet_super$params
+  )
+}
+
+```
+
+```{r globals}
+
+theme = theme(axis.ticks = element_blank(),
+        axis.text = element_text(size=14, color='black'),
+        axis.title.y = element_text(vjust=.5, angle=0),
+        axis.line.x = element_line(colour = 'black', size = .5),
+        axis.line.y = element_line(colour = 'black', size = .5),
+        panel.background = element_blank(),
+        panel.border = element_blank(),
+        panel.grid = element_line(colour = '#DFDFDF', size = 0),
+        plot.title = element_text(hjust = 0.5),
+        text = element_text(size=16, family="serif"),
+        legend.text = element_text(size=16),
+        legend.box.background = element_blank(),
+        legend.position = "right")
+
+cbp1 <- c("#E69F00", "#56B4E9", "#009E73",
+          "#0072B2", "#D55E00", "#999999", "#F0E442",  "#CC79A7")
+
+p_value <- function(betas){
+  # calculate p-value for two-sided difference from 0 test with a bootstrapped distribution of statistics, beta
+  abs_mean_beta = abs(mean(betas))
+  centered_betas = betas - mean(betas)
+  outside_prop = mean(centered_betas < -abs_mean_beta) + mean(centered_betas > abs_mean_beta)
+  return(outside_prop)
+}
+
+bootstrapMeanGrid = function(df, bootTimes=100000, seeds=10){
+  '
+  df1 is n_data x n_seeds of correctness 0/1 indicators
+  columns are the names of the seeds, starting at 0
+  bootstrap rows and columns of this matrix to compute a mean value
+  returns CI on the ovr mean
+  '
+  seeds <- as.character(0:(seeds-1))
+  use_df <- df %>% select(seeds)
+  max_idx <- nrow(use_df)
+  max_seed <- ncol(use_df)
+  stats <- rep(NA, bootTimes)
+  for (bi in 1:bootTimes){
+    seeds <- sample(x=1:max_seed, size=max_seed, replace=TRUE)
+    idx <- sample(x=1:max_idx, size=max_idx, replace=TRUE)
+    sample_df <- use_df[idx, seeds]
+    stats[bi] <- mean(as.matrix(sample_df))
+  }
+  mean <- mean(stats)
+  quantiles <- quantile(stats,c(.025,.975))
+  ub <- quantiles[2]
+  CI = as.double(ub - mean)
+  return(CI)
+}
+
+bootstrapDifferenceGrid = function(df1, df2, bootTimes=100000, seeds=10){
+  '
+  df1 and df2 are n_data x n_seeds of correctness 0/1 indicators
+  columns are the names of the seeds, starting at 0
+  bootstrap rows and columns of this matrix
+  '
+  seeds <- as.character(0:(seeds-1))
+  use_df1 <- df1 %>% select(seeds)
+  use_df2 <- df2 %>% select(seeds)
+  max_idx <- nrow(use_df1)
+  max_seed <- ncol(use_df1)
+  stats <- rep(NA, bootTimes)
+  for (bi in 1:bootTimes){
+    seeds <- sample(x=1:max_seed, size=max_seed, replace=TRUE)
+    idx <- sample(x=1:max_idx, size=max_idx, replace=TRUE)
+    sample_df1 <- use_df1[idx, seeds]
+    sample_df2 <- use_df2[idx, seeds]
+    stats[bi] <- mean(as.matrix(sample_df1)) - mean(as.matrix(sample_df2))
+  }
+  mean <- mean(stats)
+  quantiles <- quantile(stats,c(.025,.975))
+  lb <- quantiles[1]
+  ub <- quantiles[2]
+  p <- p_value(stats)
+  str_format = sprintf('%.2f \u00B1 %.2f (p = %.4f)', 100*mean, 100*(ub-lb)/2, p)
+  return(str_format)
+}
+
+```
+
+
+```{r trajectories across sparsity levels}
+
+use_data <- random_data_traj
+
+new_data <- use_data %>% 
+  group_by(sparsity, step) %>%
+  summarise(suff=mean(suff),
+            comp=mean(comp),
+            suff_woe=mean(suff_woe),
+            comp_woe=mean(comp_woe)) %>%
+  mutate(sparsity = factor(sparsity, levels=c("0.05", "0.1", "0.2", "0.5", "0.8", "0.9", "0.95")))
+
+(suff_plot <- new_data %>%
+  ggplot(aes(step, suff_woe, group=sparsity, color=sparsity)) +
+  geom_line(size=.5) +
+  labs(title="Outcome by Step and Sparsity") + 
+  xlab("Step") + ylab("Outcome ") + 
+  ylim(c(-.05, 1)) +
+  theme)
+
+```
+
+
+
+```{r compare search trajectories - make data}
+
+# will subset to searches than ran for up to 1000 steps. shorter searches are excluded
+
+new_data_seed <- random_data_traj %>%
+  mutate(method=factor('Random', levels=c("Random", "Ordered", "SA"))) %>%
+  rbind(
+    SA_data %>%
+      mutate(method=factor('SA', levels=c("Random", "Ordered", "SA")))
+  ) %>%
+  rbind(ordered_data %>%
+    mutate(method=factor('Ordered', levels=c("Random", "Ordered", "SA")),
+           step=step+250)
+  ) %>%
+  mutate(step=step+1) %>%
+  group_by(id, sparsity, method, seed) %>%
+  mutate(reached1000 = max(step)==1000,
+         reached250 = max(step)>=250) %>%
+  filter(reached1000==TRUE) %>%
+  group_by(step, method, seed) %>%
+  summarise(suff_CI=1.96*sd(suff)/sqrt(n()),
+            suff=mean(suff),
+            comp=mean(comp),
+            suff_woe=mean(suff_woe),
+            comp_woe=mean(comp_woe)) 
+
+new_data_seed %>%
+  group_by(method, seed) %>%
+  summarise(n())
+
+
+new_data <- new_data_seed %>%
+  group_by(step, method) %>%
+  summarise(suff_CI=1.96*sd(suff)/sqrt(n()),
+            comp_CI=1.96*sd(comp)/sqrt(n()),
+            suff_CI_woe=1.96*sd(suff_woe)/sqrt(n()),
+            comp_CI_woe=1.96*sd(comp_woe)/sqrt(n()),
+            suff=mean(suff),
+            comp=mean(comp),
+            suff_woe=mean(suff_woe),
+            comp_woe=mean(comp_woe)) 
+
+# smooth the SA trajectories
+# set step=1 to random step 1, bc originally step 1 is the best of the first *restarts* SA runs (typically 10)
+# and just keep every 10th SA step, because that's when the update occurs
+x <- c()
+for (col in c('suff', 'comp', 'suff_woe', 'comp_woe')){
+  x <- c(x, new_data %>%
+          filter(method=='Random', step==1) %>%
+          pull(col))
+}
+new_data <- new_data %>%
+  filter(method != 'SA' | (step %% 10 == 0 || step==1)) %>%
+  mutate(suff=case_when(step==1 & method=='SA' ~ x[1],
+                        TRUE ~ suff),
+         suff_woe=case_when(step==1 & method=='SA' ~ x[3],
+                        TRUE ~ suff_woe),
+         comp=case_when(step==1 & method=='SA' ~ x[2],
+                        TRUE ~ comp),
+         comp_woe=case_when(step==1 & method=='SA' ~ x[4],
+                        TRUE ~ comp_woe),
+         )
+
+```
+
+```{r compare search trajectories - plotting}
+
+new_data %>%
+  group_by(method) %>%
+  filter(step==1000) %>%
+  summarise(suff=mean(suff),
+            comp=mean(comp),
+            suff_woe=mean(suff_woe),
+            comp_woe=mean(comp_woe))
+
+new_data_seed %>%
+  group_by(method, seed) %>%
+  filter(step==1000) %>%
+  summarise(suff=mean(suff),
+            comp=mean(comp),
+            suff_woe=mean(suff_woe),
+            comp_woe=mean(comp_woe))
+
+if (data_name == 'fever'){
+  ylim = c(-.05, .1)
+} else{
+  ylim = c(0, .3)
+}
+
+(suff_plot <- new_data %>%
+  ggplot(aes(step, suff, group=method, color=method)) +
+  geom_smooth(size=.65) +
+  # geom_line(size=.65) +
+  geom_ribbon(aes(ymin=suff-suff_CI, ymax=suff+suff_CI, fill=method), alpha=.12, size=.05) +
+  labs(title="Sufficiency By Search Budget") + 
+  xlab("Step") + ylab("Suff") + 
+  # ylim(ylim) +
+  ylim(-.1, .1) +
+  scale_color_manual(values = cbp1, name = "Method",
+                 labels=c("Random", "Ordered", "Parallel Local")) +
+  scale_fill_manual(values = cbp1, name = "Method",
+                 labels=c("Random", "Ordered", "Parallel Local")) +
+  theme)
+
+(suff_plot_woe <- new_data %>%
+  ggplot(aes(step, suff_woe, group=method, color=method)) +
+  geom_line(size=.65) +
+  geom_ribbon(aes(ymin=suff_woe-suff_CI_woe, ymax=suff_woe+suff_CI_woe, fill=method), alpha=.12, size=.05) +
+  labs(title="Suff WoE By Search Budget") + 
+  xlab("Step") + ylab("Suff") + 
+  # ylim(ylim) +
+  scale_color_manual(values = cbp1, name = "Method",
+                 labels=c("Random", "Ordered", "Parallel Local")) +
+  scale_fill_manual(values = cbp1, name = "Method",
+                 labels=c("Random", "Ordered", "Parallel Local")) +
+  theme)
+
+(comp_plot <- new_data %>%
+  ggplot(aes(step, comp, group=method, color=method)) +
+  geom_line(size=.65) +
+  geom_ribbon(aes(ymin=comp-comp_CI, ymax=comp+comp_CI, fill=method), alpha=.12, size=.05) + 
+  labs(title="Comp by Step and Method") + 
+  xlab("Step") + ylab("Outcome ") + 
+  ylim(c(0, .3)) +
+  # ylim(c(.5, 1)) +
+  scale_color_manual(values = cbp1, name = "Method",
+                 labels=c("Random", "Ordered", "Parallel Local")) +
+  scale_fill_manual(values = cbp1, name = "Method",
+                 labels=c("Random", "Ordered", "Parallel Local")) +
+  theme)
+
+(comp_plot_woe <- new_data %>%
+  ggplot(aes(step, comp_woe, group=method, color=method)) +
+  geom_line(size=.65) +
+  geom_ribbon(aes(ymin=comp_woe-comp_CI_woe, ymax=comp_woe+comp_CI_woe, fill=method), alpha=.12, size=.05) + 
+  labs(title="Comp WoE by Step and Method") + 
+  xlab("Step") + ylab("Outcome ") + 
+  # ylim(c(0, .25)) +
+  # ylim(c(.5, 1)) +
+  scale_color_manual(values = cbp1, name = "Method",
+                 labels=c("Random", "Ordered", "Parallel Local")) +
+  scale_fill_manual(values = cbp1, name = "Method",
+                 labels=c("Random", "Ordered", "Parallel Local")) +
+  theme)
+
+ggsave(suff_plot, filename = sprintf("figures/%s_search_method_comparisons.pdf", data_name), device = cairo_pdf,
+  width = 7, height = 4, units = "in")
+
+```
+
+```{r hack for combining plots}
+
+# get dataset specific new_data by running chunks above and saving here
+# fever_new_data <- new_data
+# esnli_new_data <- new_data
+fever_new_data$data = 'FEVER'
+esnli_new_data$data = 'SNLI'
+comb_data <- rbind(fever_new_data, esnli_new_data) %>%
+  filter(method != 'SA' | step > 1) %>%
+  pivot_longer(cols=c("suff","comp"), names_to="metric", values_to="outcome") %>%
+  mutate(CI = case_when(metric=='suff'~suff_CI,
+                        metric=='comp'~comp_CI),
+         metric = recode_factor(metric, suff='Suff', comp='Comp'),
+         condition = paste(metric, sprintf("(%s)", data)),
+         condition = factor(condition, levels=c("Suff (SNLI)", "Suff (FEVER)", "Comp (SNLI)", "Comp (FEVER)")))
+# add CIs
+
+(comb_plot <- comb_data %>%
+  ggplot(aes(step, outcome, group=method, color=method)) +
+  geom_line(size=.55) +
+  geom_ribbon(aes(ymin=outcome-CI, ymax=outcome+CI, fill=method), linetype=2, alpha=.2, size=.05) +
+  labs(title="Search Method Performance Over Time") + 
+  xlab("Step") + ylab("") + 
+  scale_color_manual(values = cbp1, name = "Method",
+                 labels=c("Random", "Ordered", "Parallel Local")) +
+  scale_fill_manual(values = cbp1, name = "Method",
+                 labels=c("Random", "Ordered", "Parallel Local")) +
+  facet_wrap_custom(~ condition,
+                    scales="free",
+                    scale_overrides = list(
+    scale_override(1, scale_y_continuous(limits=c(0, .3), breaks = c(0, .1, .2, .3))),
+    scale_override(2, scale_y_continuous(limits=c(-.1, .2), breaks = c(-.1, 0, .1, .2))),
+    scale_override(3, scale_y_continuous(limits=c(.7, 1), breaks = c(.7, .8, .9, 1))),
+    scale_override(4, scale_y_continuous(limits=c(0, .3), breaks = c(0, .1, .2, .3))))
+                    ) +
+    theme(panel.spacing.y = unit(1, "lines"),
+          panel.spacing.x = unit(1, "lines"),
+          panel.border = element_rect(colour = "black", fill=NA, size=.4),
+          axis.line.x = element_line(colour = 'black', size = .1),
+          axis.line.y = element_line(colour = 'black', size = .1))
+)
+
+ggsave(comb_plot, filename = sprintf("figures/combined_search_trajectories.pdf", data_name), 
+  width = 7.6, height = 4, units = "in")
+
+
+```
+
+
+
+
+

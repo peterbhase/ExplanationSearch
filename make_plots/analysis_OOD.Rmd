@@ -1,0 +1,569 @@
+---
+title: ""
+author: ""
+date: ""
+output: pdf_document
+---
+
+```{r setup}
+library(tidyverse)
+library(collections)
+```
+
+```{r read data}
+# data_name <- 'SST2'
+data_name <- 'eSNLI'
+data <- read_csv(sprintf('%s_bert_10k.csv', data_name)) %>%
+  select(-label_probs, -weight_of_evidence) %>%
+  mutate(acc=1*(label==pred))
+data2 <- read_csv(sprintf('%s_roberta_10k.csv', data_name)) %>%
+  select(-label_probs, -weight_of_evidence) %>%
+  mutate(acc=1*(label==pred))
+data3 <- read_csv(sprintf('%s_roberta-large_10k.csv', data_name)) %>%
+  select(-label_probs, -weight_of_evidence) %>%
+  mutate(acc=1*(label==pred))
+```
+
+
+
+```{r globals}
+
+theme = theme(axis.ticks = element_blank(),
+        axis.text = element_text(size=14, color='black'),
+        axis.title.y = element_text(vjust=.5, angle=0),
+        axis.line.x = element_line(colour = 'black', size = .5),
+        axis.line.y = element_line(colour = 'black', size = .5),
+        panel.background = element_blank(),
+        panel.border = element_blank(),
+        panel.grid = element_line(colour = '#DFDFDF', size = 0),
+        plot.title = element_text(hjust = 0.5),
+        text = element_text(size=16, family="serif"),
+        legend.text = element_text(size=16),
+        legend.box.background = element_blank(),
+        legend.position = "right")
+
+cbp1 <- c("#E69F00", "#56B4E9", "#009E73",
+          "#0072B2", "#D55E00", "#999999", "#F0E442",  "#CC79A7")
+
+p_value <- function(betas){
+  # calculate p-value for two-sided difference from 0 test with a bootstrapped distribution of statistics, beta
+  abs_mean_beta = abs(mean(betas))
+  centered_betas = betas - mean(betas)
+  outside_prop = mean(centered_betas < -abs_mean_beta) + mean(centered_betas > abs_mean_beta)
+  return(outside_prop)
+}
+
+bootstrapMeanGrid = function(df, bootTimes=100000, seeds=10){
+  '
+  df is n_data x n_seeds of correctness 0/1 indicators
+  columns are the names of the seeds, starting at 0
+  bootstrap rows and columns of this matrix to compute a mean value
+  returns CI on the ovr mean
+  '
+  seeds <- as.character(0:(seeds-1))
+  use_df <- df %>% select(seeds)
+  max_idx <- nrow(use_df)
+  max_seed <- ncol(use_df)
+  stats <- rep(NA, bootTimes)
+  for (bi in 1:bootTimes){
+    seeds <- sample(x=1:max_seed, size=max_seed, replace=TRUE)
+    idx <- sample(x=1:max_idx, size=max_idx, replace=TRUE)
+    sample_df <- use_df[idx, seeds]
+    stats[bi] <- mean(as.matrix(sample_df))
+  }
+  mean <- mean(stats)
+  quantiles <- quantile(stats,c(.025,.975))
+  ub <- quantiles[2]
+  CI = as.double(ub - mean)
+  return(CI)
+}
+
+bootstrapDifferenceGrid = function(df1, df2, bootTimes=100000, seeds=10){
+  '
+  df1 and df2 are n_data x n_seeds of correctness 0/1 indicators
+  columns are the names of the seeds, starting at 0
+  bootstrap rows and columns of this matrix
+  '
+  seeds <- as.character(0:(seeds-1))
+  use_df1 <- df1 %>% select(seeds)
+  use_df2 <- df2 %>% select(seeds)
+  max_idx <- nrow(use_df1)
+  max_seed <- ncol(use_df1)
+  stats <- rep(NA, bootTimes)
+  for (bi in 1:bootTimes){
+    seeds <- sample(x=1:max_seed, size=max_seed, replace=TRUE)
+    idx <- sample(x=1:max_idx, size=max_idx, replace=TRUE)
+    sample_df1 <- use_df1[idx, seeds]
+    sample_df2 <- use_df2[idx, seeds]
+    stats[bi] <- mean(as.matrix(sample_df1)) - mean(as.matrix(sample_df2))
+  }
+  mean <- mean(stats)
+  quantiles <- quantile(stats,c(.025,.975))
+  lb <- quantiles[1]
+  ub <- quantiles[2]
+  p <- p_value(stats)
+  str_format = sprintf('%.2f \u00B1 %.2f (p = %.4f)', 100*mean, 100*(ub-lb)/2, p)
+  return(str_format)
+}
+
+```
+
+```{r compute model accuracies for single model}
+
+None_acc <-  data %>%
+  filter(masking_style == 'None') %>%
+  summarise(acc = mean(label==pred)) %>%
+  pull(acc)
+
+(new_data <- data %>%
+  filter(masking_style != 'None') %>%
+  mutate(sparsity=factor(sparsity, levels=c("0.05", "0.1", "0.2", "0.5", "0.8", "0.9", "0.95")),
+         masking_style = case_when(masking_style == 'attention' ~ 'Attention Scores',
+                                   masking_style == 'attention-subnormal' ~ 'Attention Probs',
+                                   masking_style == 'mask-token' ~ 'Mask Token',
+                                   masking_style == 'slice-out' ~ 'Slice Out',
+                                   masking_style == 'zero-vector' ~ 'Zero Embedding',
+                                   masking_style == 'marginalize' ~ 'Marginalize',
+                                   )) %>%
+  group_by(seed, masking_style, sparsity) %>%
+  summarise(acc = mean(label==pred),
+            drop = acc - None_acc
+            )
+)
+
+(p2 <- new_data %>%
+  ggplot(aes(sparsity, acc, color=masking_style)) +
+  geom_boxplot() +
+  # geom_point() +
+  labs(title="Model Sensitivity to Replace Function") + 
+  xlab("Percent Tokens Removed") + ylab("Acc. ") + 
+  ylim(c(0, 1)) +
+  scale_color_manual(values = cbp1, name = "Replace Function") + 
+  theme)
+
+(p3 <- new_data %>%
+  ggplot(aes(sparsity, drop, color=masking_style)) +
+  geom_boxplot(outlier.alpha=0) +
+  # geom_point() +
+  labs(title="Model Sensitivity to Replace Function") + 
+  xlab("Percent Tokens Removed") + ylab("Change\n    in Acc. ") + 
+  ylim(c(-.5, 0)) +
+  scale_color_manual(values = cbp1, name = "Replace Function") + 
+  theme)
+
+```
+
+```{r compute model accuracies across models}
+
+data$model = 'bert'
+data2$model = 'roberta'
+data3$model = 'roberta-large'
+comb_data <- rbind(data, data2, data3) %>%
+  mutate(model = as.factor(model))
+
+None_acc <-  comb_data %>%
+  filter(masking_style == 'None') %>%
+  group_by(model) %>%
+  summarize(acc = mean(acc))
+
+(new_data <- comb_data %>%
+  filter(masking_style != 'None') %>%
+  mutate(sparsity=factor(sparsity, levels=c("0.2", "0.5", "0.8")),
+         masking_style = case_when(masking_style == 'attention' ~ 'Attention Mask',
+                                   masking_style == 'mask-token' ~ 'Mask Token',
+                                   masking_style == 'slice-out' ~ 'Slice Out',
+                                   masking_style == 'zero-vector' ~ 'Zero Embedding',
+                                   masking_style == 'marginalize-v2' ~ 'Marginalize',
+                                   )) %>%
+  group_by(model, seed, masking_style, sparsity) %>%
+  summarise(ovr_acc = mean(label==pred)) %>%
+  ungroup(model) %>%
+  mutate(
+    drop = case_when(
+      model=='bert' ~ ovr_acc - None_acc$acc[1],
+      model=='roberta' ~ ovr_acc - None_acc$acc[2],
+      model=='roberta-large' ~ ovr_acc - None_acc$acc[3],
+    ),
+    model = case_when(model=='bert' ~ 'BERT-Base',
+                       model=='roberta' ~'RoBERTa-Base',
+                       model=='roberta-large' ~ 'RoBERTa-Large'
+                       )
+  )
+)
+
+(p3 <- new_data %>%
+  ggplot(aes(sparsity, drop, color=masking_style)) +
+  geom_boxplot(outlier.alpha=0) +
+  labs(title="Model Sensitivity to Replace Function") + 
+  xlab("Percent Tokens Removed") + ylab("Drop\n    in Acc. ") + 
+  ylim(c(-.6, 0)) +
+  scale_color_manual(values = cbp1, name = "Replace Function") + 
+  theme +
+  facet_wrap( ~ model, nrow=1)
+)
+
+ggsave(p3, filename = sprintf("figures/masking_%s_10k_acc.pdf", data_name),
+  width = 12, height = 4, units = "in")
+
+(reduced_plot <- new_data %>%
+    filter(model != 'RoBERTa-Large',
+           sparsity %in% c('0.2', '0.5', '0.8')) %>%
+  ggplot(aes(sparsity, drop, color=masking_style)) +
+  geom_boxplot(outlier.alpha=0) +
+  labs(title="Model Sensitivity to Replace Function") + 
+  xlab("Percent Tokens Removed") + ylab("Change\n in Acc. ") + 
+  ylim(c(-.6, 0)) +
+  scale_color_manual(values = cbp1, name = "Replace Function") + 
+  theme +
+  facet_wrap( ~ model, nrow=1)
+)
+
+ggsave(reduced_plot, filename = sprintf("figures/masking_%s_10k_acc_reduced.pdf", data_name),   
+  width = 9, height = 4, units = "in")
+
+```
+
+```{r custom facet scales}
+
+scale_override <- function(which, scale) {
+  if(!is.numeric(which) || (length(which) != 1) || (which %% 1 != 0)) {
+    stop("which must be an integer of length 1")
+  }
+  
+  if(is.null(scale$aesthetics) || !any(c("x", "y") %in% scale$aesthetics)) {
+    stop("scale must be an x or y position scale")
+  }
+  
+  structure(list(which = which, scale = scale), class = "scale_override")
+}
+
+CustomFacetGrid <- ggproto(
+  "CustomFacetGrid", FacetGrid,
+  init_scales = function(self, layout, x_scale = NULL, y_scale = NULL, params) {
+    # make the initial x, y scales list
+    scales <- ggproto_parent(FacetGrid, self)$init_scales(layout, x_scale, y_scale, params)
+    
+    if(is.null(params$scale_overrides)) return(scales)
+    
+    max_scale_x <- length(scales$x)
+    max_scale_y <- length(scales$y)
+    
+    # ... do some modification of the scales$x and scales$y here based on params$scale_overrides
+    for(scale_override in params$scale_overrides) {
+      which <- scale_override$which
+      scale <- scale_override$scale
+      
+      if("x" %in% scale$aesthetics) {
+        if(!is.null(scales$x)) {
+          if(which < 0 || which > max_scale_x) stop("Invalid index of x scale: ", which)
+          scales$x[[which]] <- scale$clone()
+        }
+      } else if("y" %in% scale$aesthetics) {
+        if(!is.null(scales$y)) {
+          if(which < 0 || which > max_scale_y) stop("Invalid index of y scale: ", which)
+          scales$y[[which]] <- scale$clone()
+        }
+      } else {
+        stop("Invalid scale")
+      }
+    }
+    
+    # return scales
+    scales
+  }
+)
+
+facet_grid_custom <- function(..., scale_overrides = NULL) {
+  # take advantage of the sanitizing that happens in facet_wrap
+  facet_super <- facet_grid(...)
+  
+  # sanitize scale overrides
+  if(inherits(scale_overrides, "scale_override")) {
+    scale_overrides <- list(scale_overrides)
+  } else if(!is.list(scale_overrides) || 
+            !all(vapply(scale_overrides, inherits, "scale_override", FUN.VALUE = logical(1)))) {
+    stop("scale_overrides must be a scale_override object or a list of scale_override objects")
+  }
+  
+  facet_super$params$scale_overrides <- scale_overrides
+  
+  ggproto(NULL, CustomFacetGrid,
+    shrink = facet_super$shrink,
+    params = facet_super$params
+  )
+}
+
+```
+
+
+```{r hack together a 2x2 grid plot}
+
+# make one new_data, then save here, then make the other, and save here
+# sst2_new_data <- new_data
+# esnli_new_data <- new_data
+sst2_new_data$data = 'SST2'
+esnli_new_data$data = 'SNLI'
+comb_data <- rbind(sst2_new_data, esnli_new_data)
+
+border_size = .4
+(reduced_plot <- comb_data %>%
+    filter(model != 'RoBERTa-Large',
+           masking_style != 'Marginalize-Old',
+           sparsity %in% c('0.2', '0.5', '0.8')) %>%
+  ggplot(aes(sparsity, drop, color=masking_style)) +
+  geom_boxplot(outlier.alpha=0) +
+  labs(title="Model Sensitivity to Replace Function") + 
+  xlab("Percent Tokens Removed") + ylab("Change\n in Acc. ") + 
+  scale_color_manual(values = cbp1, name = "Replace Function") + 
+  theme +
+  facet_grid_custom(data ~ model, 
+                    scales="free", scale_overrides = list(
+    scale_override(1, scale_y_continuous(limits=c(-.52, 0), breaks = c(0, -.1, -.2, -.3, -.4, -.5))),
+    scale_override(2, scale_y_continuous(breaks = c(0, -.1, -.2, -.3, -.4))))
+                    ) + 
+    theme(panel.spacing.y = unit(1, "lines"),
+          panel.border = element_rect(colour = "black", fill=NA, size=border_size),
+          axis.line.x = element_line(colour = 'black', size = .1),
+          axis.line.y = element_line(colour = 'black', size = .1))
+)
+
+ggsave(reduced_plot, filename = sprintf("figures/masking_combined_10k_acc_reduced.pdf", data_name),
+  width = 8, height = 4, units = "in")
+
+```
+
+
+
+```{r prepare for bootstrap differences}
+
+use_data = data
+# use_data = joint_data %>%
+  # select(-label_probs, -weight_of_evidence)
+seeds <- c('0','1','2','3','4','5','6','7','8','9')
+test_sparsity <- .8
+
+(None_accs <- use_data %>%
+  filter(masking_style=='None') %>%
+  unique() %>% # remove duplicate writes, somehow a bug for sst2 None writing
+  mutate(acc = 1*(label==pred)) %>%
+  select(-pred, -masking_style) %>%
+  spread(seed, acc) %>%
+  select(seeds)
+)
+
+(attention_accs <- use_data %>%
+  filter(masking_style=='attention', sparsity==test_sparsity) %>%
+  # group_by(seed, idx) %>%
+  unique() %>%
+  # filter(!(idx == 2914 & seed==7 & acc==0)) %>% # || !(idx==4909 & seed==7 & acc==1)) %>%
+  mutate(acc = 1*(label==pred)) %>%
+  select(-pred, -masking_style) %>%
+    # group_by(idx, seed, label, acc) %>%
+    # summarise(n()))
+  unique() %>%
+  spread(seed, acc) %>%
+  select(seeds)
+)
+
+(mask_accs <- use_data %>%
+  filter(masking_style=='mask-token', sparsity==test_sparsity) %>%
+  unique() %>%
+  mutate(acc = 1*(label==pred)) %>%
+  select(-pred, -masking_style) %>%
+  spread(seed, acc) %>%
+  select(seeds)
+)
+
+(slice_accs <- use_data %>%
+  filter(masking_style=='slice-out', sparsity==test_sparsity) %>%
+  unique() %>%
+  mutate(acc = 1*(label==pred)) %>%
+  select(-pred, -masking_style) %>%
+  spread(seed, acc) %>%
+  select(seeds)
+)
+
+(zero_accs <- use_data %>%
+  filter(masking_style=='zero-vector', sparsity==test_sparsity) %>%
+  unique() %>%
+  mutate(acc = 1*(label==pred)) %>%
+  select(-pred, -masking_style) %>%
+  spread(seed, acc) %>%
+  select(seeds)
+)
+
+```
+
+
+```{r bootstrap differences in accuracies}
+
+sprintf("Testing at sparsity: %s", test_sparsity)
+bt = 100000
+
+# Attention vs Mask
+bootstrapDifferenceGrid(attention_accs, mask_accs, bootTimes=bt, seeds=length(seeds))
+
+# Attention vs Slice
+bootstrapDifferenceGrid(attention_accs, slice_accs, bootTimes=bt, seeds=length(seeds))
+
+# Mask vs Slice
+bootstrapDifferenceGrid(mask_accs, slice_accs, bootTimes=bt, seeds=length(seeds))
+
+# Mask vs Zero
+bootstrapDifferenceGrid(mask_accs, zero_accs, bootTimes=bt, seeds=length(seeds))
+
+# Attention vs Zero
+bootstrapDifferenceGrid(attention_accs, zero_accs, bootTimes=bt, seeds=length(seeds))
+
+
+```
+
+```{r differences by seed}
+
+use_data = data2
+use_sparsity = .8
+
+# comparison of how often one method is better than the other
+use_data %>%
+  filter(masking_style=='attention', sparsity==use_sparsity) %>%
+  group_by(seed) %>%
+  summarise(mean1 = mean(acc)) %>% 
+  left_join(
+      use_data %>%
+    filter(masking_style=='mask-token', sparsity==use_sparsity) %>%
+    group_by(seed) %>%
+    summarise(mean2 = mean(acc))
+  ) %>%
+  # summarise(mean(mean1),
+  #           mean(mean2))
+  summarise(better = mean(mean1 > mean2))
+
+
+use_data %>%
+  filter(masking_style=='mask-token', sparsity==use_sparsity) %>%
+  group_by(seed) %>%
+  summarise(mean1 = mean(acc)) %>% 
+  left_join(
+      use_data %>%
+    filter(masking_style=='slice-out', sparsity==use_sparsity) %>%
+    group_by(seed) %>%
+    summarise(mean2 = mean(acc))
+  ) %>%
+  summarise(better = mean(mean1 > mean2))
+
+```
+
+
+```{r make data for robustness analysis}
+
+base_data <- read_csv('esnli_bert_10k.csv') %>%
+  select(idx, label, pred, masking_style, seed, sparsity) %>%
+  mutate(acc = 1*(label==pred))
+
+joint_data <- read_csv('esnli_bert_10k_maskattention_prop_prop-1.0.csv') %>%
+  rbind(
+    read_csv('eSNLI_bert_10k_maskmask-token_prop-1.0.csv')
+  ) %>%
+    rbind(
+    read_csv('eSNLI_bert_10k_maskslice-out_prop-1.0.csv')
+  ) %>%
+    rbind(
+    read_csv('eSNLI_bert_10k_maskzero-vector_prop-1.0.csv')
+  ) %>%
+  mutate(acc = 1*(label==pred)) %>%
+  filter(sparsity %in% c(.2, .5, .8))
+
+# per source accs (including None masking)
+None_acc <-  base_data %>%
+  filter(masking_style == 'None') %>%
+  summarise(acc = mean(label==pred)) %>%
+  pull(acc)
+ct_data <- read_csv("esnli_10k_joint_all.csv")
+None_accs <- ct_data %>%
+  group_by(masking_style) %>%
+  summarise(acc = mean(label==pred)) %>%
+  pull(acc)
+
+# grab standard model results from esnli data
+standard_data <- base_data %>%
+  filter(sparsity %in% c(.2, .5, .8), 
+         masking_style %in% c("attention", "mask-token")) %>%
+  mutate(model_type="Standard")
+
+```
+
+```{r full robustness analysis}
+
+new_data <- joint_data %>%
+  group_by(seed, masking_style, sparsity) %>%
+  summarise(acc=mean(acc)) %>%
+  ungroup() %>%
+  mutate(drop = case_when(masking_style=='attention'~ acc - None_accs[1],
+                          masking_style=='mask-token'~ acc - None_accs[2],
+                          masking_style=='slice-out'~ acc - None_accs[3],
+                          masking_style=='zero-vector'~ acc - None_accs[4]),
+          sparsity=factor(sparsity, levels=c("0.2", "0.5", "0.8")),
+         joint='Counterfactual-Trained'
+         )
+new_base_data <- base_data %>% 
+      filter(masking_style != 'None', sparsity %in% c(.2, .5, .8)) %>%
+      group_by(seed, masking_style, sparsity) %>%
+      summarise(drop=mean(acc) - None_acc,
+                acc = mean(acc)) %>%
+      mutate(
+         joint='Standard',
+         sparsity=factor(sparsity, levels=c("0.2", "0.5", "0.8"))
+         )
+new_data <- bind_rows(new_data, new_base_data)
+new_data <- new_data %>%
+    mutate(joint=factor(joint, levels = c("Counterfactual-Trained", "Standard")),
+            masking_style = case_when(masking_style == 'attention' ~ 'Attention Mask',
+                                      masking_style == 'mask-token' ~ 'Mask Token',
+                                      masking_style == 'slice-out' ~ 'Slice Out',
+                                      masking_style == 'zero-vector' ~ 'Zero Vector')
+  ) %>%
+  filter(!is.na(masking_style))
+
+(p3 <- new_data %>%
+  ggplot(aes(sparsity, drop, color=masking_style)) +
+  geom_boxplot(outlier.alpha=0) +
+  labs(title="Counterfactual-Trained Model Robustness") + 
+  xlab("Percent Tokens Removed") + ylab("Change\nin Acc. ") + 
+  ylim(c(-.5, 0)) +
+  scale_color_manual(values = cbp1[-2], name = "Replace Function") +
+  scale_fill_manual(values = cbp1[-2], name = "Replace Function") +
+  theme +
+  facet_wrap( ~ joint, nrow=1)
+)
+
+ggsave(p3, filename = "figures/masking_esnli_10k_bert_robustification.pdf",
+  width = 7.6, height = 4, units = "in")
+
+# view the difference
+x <- new_data %>% select(-acc) %>% pivot_wider(names_from = "joint", values_from="drop")
+x[,6] <- x[,4] - x[,5]
+View(x)
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

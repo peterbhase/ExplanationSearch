@@ -1,0 +1,11 @@
+-e explanation_methods_and_eval/transformers/
+-e explanation_methods_and_eval/allennlp/
+numpy
+pandas
+scikit-learn
+p_tqdm
+lime
+dataclasses
+tokenizers==0.8.1.rc1
+jsonlines
+pdbpp
