@@ -172,7 +172,7 @@ if __name__ == '__main__':
 
         print("Model input: ", model_input_str)
         print("Explanation: ", explanation_str)
-        print(f"Model predicts {id2label[pred_class.item()]} with pred prob: {pred_prob:.3f} | Pred prob for explanation: {pred_prob-best_obj:.2f} | {args.objective}: {100*best_obj:.2f} points")
+        print(f"Model predicts {id2label[pred_class.item()]} with pred prob: {pred_prob:.3f} | Pred prob for explanation: {pred_prob-best_obj:.3f} | {args.objective}: {100*best_obj:.2f} points")
         print(f"Input label: {id2label[label]}")
         print()
 

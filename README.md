@@ -1,6 +1,6 @@
 # Search Methods for Sufficient, Socially-Aligned Feature Importance Explanations with In-Distribution Counterfactuals
 
-This is the repository for the paper here, including code for measuring OOD-ness of explanation counterfactuals and several new search methods for identifying explanations.
+This is the repository for the paper [here](arxiv-link), including code for measuring OOD-ness of explanation counterfactuals and several new search methods for identifying explanations.
 
 First we give a demo of Parallel Local Search, and then we describe steps for replicating experimental results.
 
@@ -10,7 +10,9 @@ Experiment scripts in the folders here have different requirements. After instal
 
 ## Parallel Local Search Demo
 
-We give a demo for an NLI model, using SNLI dev points. Note that the model used in this demo is not a Counterfactual-Trained model, which is what we ultimately recommend using when creating feature importance explanations. The demo script `pls_demo.py` can be run on a GPU with device ID 0 with the following command:
+Parallel Local Search is the best explanation method we test, as per the Sufficiency and Comprehensiveness metrics. We give a demo for an NLI model, using SNLI dev points. Note that the model used in this demo is not a Counterfactual-Trained model, which is what we ultimately recommend using when creating feature importance explanations. 
+
+The demo script `pls_demo.py` can be run on a GPU with device ID 0 with the following command:
 
 `python pls_demo.py --device 0 --num_search 1000 --objective suff --explanation_sparsity .2`
 
@@ -24,35 +26,36 @@ Blanks (like this: __) in the output of this script represent 0s in the input at
 Actual words in the script output are seen by the model
 -------------------------------------
 Loading model...
-Searching for explanation for point 0...took 2.74 seconds!
+Searching for explanation for point 0...took 2.23 seconds!
 Model input:  <s>A dog swims in a pool.</s></s>A puppy is swiming.</s>
 Explanation:   __ __ swim __ __ __ __ __ __ puppy __ swim __ __
-Model predicts neutral with pred prob: 0.937 | Pred prob for explanation: 0.97 | suff: -3.11 points
+Model predicts neutral with pred prob: 0.937 | Pred prob for explanation: 0.969 | suff: -3.11 points
 Input label: neutral
 
-Searching for explanation for point 1...took 6.71 seconds!
+Searching for explanation for point 1...took 5.33 seconds!
 Model input:  <s>A man on a beach chopping coconuts with machete.</s></s>A man is outdoors</s>
 Explanation:   __ man __ __ beach __ __ __ __ __ __ __ __ __A man __ __
-Model predicts entailment with pred prob: 0.972 | Pred prob for explanation: 0.98 | suff: -0.59 points
+Model predicts entailment with pred prob: 0.972 | Pred prob for explanation: 0.978 | suff: -0.59 points
 Input label: entailment
 
-Searching for explanation for point 2...took 6.30 seconds!
+Searching for explanation for point 2...took 5.20 seconds!
 Model input:  <s>Young people sit on the rocks beside their recreational vehicle.</s></s>A group of senior citizens sit by their RV.</s>
 Explanation:  Young people __ __ __ __ __ __ __ __ __ __ __ of senior citizens __ __ __ __ __
-Model predicts contradiction with pred prob: 0.916 | Pred prob for explanation: 1.00 | suff: -8.34 points
+Model predicts contradiction with pred prob: 0.916 | Pred prob for explanation: 1.000 | suff: -8.34 points
 Input label: contradiction
 
-Searching for explanation for point 3...took 5.84 seconds!
+Searching for explanation for point 3...took 5.55 seconds!
 Model input:  <s>After playing with her other toys, the baby decides that the guitar seems fun to play with as well.</s></s>A blonde baby.</s>
 Explanation:  After __ __ __ other __, __ __ decides __ __ __ __ __ __ __ __ __ __ __ __ blonde __ __
-Model predicts neutral with pred prob: 0.994 | Pred prob for explanation: 1.00 | suff: -0.43 points
+Model predicts neutral with pred prob: 0.994 | Pred prob for explanation: 0.998 | suff: -0.43 points
 Input label: neutral
 
-Searching for explanation for point 4...took 5.54 seconds!
+Searching for explanation for point 4...took 5.52 seconds!
 Model input:  <s>A teenage girl in winter clothes slides down a decline in a red sled.</s></s>A girl is by herself on a sled.</s>
 Explanation:   __ teenage girl __ __ __ slides __ __ __ __ __ __ __ __A girl __ __ __ __ __ __ __
-Model predicts neutral with pred prob: 0.844 | Pred prob for explanation: 0.98 | suff: -13.81 points
+Model predicts neutral with pred prob: 0.844 | Pred prob for explanation: 0.982 | suff: -13.81 points
 Input label: entailment
+
 ```
 
 Try with `--objective comp --explanation_sparsity .8` to see what tokens are removed in order to decrease the model confidence in its original prediction. 
