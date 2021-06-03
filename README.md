@@ -1,6 +1,6 @@
 # Search Methods for Sufficient, Socially-Aligned Feature Importance Explanations with In-Distribution Counterfactuals
 
-This is the repository for the paper [here](arxiv-link), including code for measuring OOD-ness of explanation counterfactuals and several new search methods for identifying explanations.
+This is the repository for the paper [here](https://arxiv.org/abs/2106.00786), including code for measuring OOD-ness of explanation counterfactuals and several new search methods for identifying explanations.
 
 First we give a demo of Parallel Local Search, and then we describe steps for replicating experimental results.
 
