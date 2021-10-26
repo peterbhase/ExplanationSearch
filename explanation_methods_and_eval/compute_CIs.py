@@ -156,6 +156,15 @@ def bootstrap_results(args):
                             results['idx'] = np.arange(n)
                             results['seed'] = seed
                             method_data = method_data.append(results, ignore_index=True)
+                    if method == 'anchors':
+                        method_dir = 'anchors'
+                        e_name = f'anchors{masked_str}_n{n}_cc_sd{seed}_per_point_metrics.csv'
+                        path = os.path.join('outputs', method_dir, dataset, split, e_name)
+                        results = safe_csv_load(path)
+                        if results is not None:
+                            results['idx'] = np.arange(n)
+                            results['seed'] = seed
+                            method_data = method_data.append(results, ignore_index=True)
                     if method == 'vanilla_gradient':
                         method_dir = f'{method}'
                         e_name = f'{method}{masked_str}_n{n}_sd{seed}_per_point_metrics.csv'
@@ -234,9 +243,9 @@ if __name__ == "__main__":
     # script parameters
     # methods = ['lime', 'gradient_search', 'vanilla_gradient', 'integrated_gradient', 'ordered_search-lime-250', 'ordered_search-lime-1000', \
     #             'hotflip', 'random_search-250', 'random_search-1000', 'PLS', 'exhaustive']
-    methods = ['lime', 'random_search-1000', 'PLS']
-    # datasets = ['esnli_flat', 'boolq_raw', 'evidence_inference', 'fever', 'multirc', 'sst2']
-    datasets = ['multirc']
+    methods = ['lime', 'random_search-1000', 'PLS', 'anchors']
+    datasets = ['esnli_flat', 'boolq_raw', 'evidence_inference', 'fever', 'multirc', 'sst2']
+    # datasets = ['esnli_flat']
     splits = ['test']
     metrics = ['suff','comp']
     # metrics = ['suff','suff_woe','comp','comp_woe']
@@ -252,17 +261,22 @@ if __name__ == "__main__":
 
     # pre-generate bootstrap idx
     max_seed = max(seeds)
-    bootstrap_col_idx = [np.random.choice(np.arange(10), size=10, replace=True) for i in range(args.num_samples)]
+    # can set to None if not running hypothesis tests
+    # bootstrap_col_idx = None
+    # bootstrap_row_idx = None
+    # use when running hypothesis tests, for same idx across runs
+    bootstrap_col_idx = [np.random.choice(seeds, size=len(seeds), replace=True) for i in range(args.num_samples)]
     bootstrap_row_idx = [np.random.choice(np.arange(n),  size=n,  replace=True)  for i in range(args.num_samples)]
     
     # add pair-wise hypothesis tests to run
-    for dataset in datasets:
-        for metric in metrics:
-            for masked_str in ['', '_masked']:
-                PLS_name = f'{dataset}_PLS{masked_str}_{metric}'
-                for baseline in ['lime', 'random_search-1000']:
-                    baseline_name = f'{dataset}_{baseline}{masked_str}_{metric}'
-                    hypothesis_tests.append((PLS_name, baseline_name))
+    if 'PLS' in methods:
+        for dataset in datasets:
+            for metric in metrics:
+                for masked_str in ['', '_masked']:
+                    PLS_name = f'{dataset}_PLS{masked_str}_{metric}'
+                    for baseline in ['lime', 'random_search-1000']:
+                        baseline_name = f'{dataset}_{baseline}{masked_str}_{metric}'
+                        hypothesis_tests.append((PLS_name, baseline_name))
 
     start = time.time()
     print(f"Running bootstrap with {args.num_samples} samples")

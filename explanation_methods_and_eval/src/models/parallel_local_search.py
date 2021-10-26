@@ -19,6 +19,7 @@ class PLSExplainer():
         self.dimensionality = dimensionality
         self.search_space = search_space
         self.max_sparsity = math.ceil(self.dimensionality*self.target_sparsity)
+        assert target_sparsity > 0 and target_sparsity < 1
 
         # limit both restarts and per_restart budget based on the number of possible explanations
         self.num_possible_explanations = self.ncr(self.dimensionality, self.max_sparsity)
@@ -296,10 +297,10 @@ class PLSExplainer():
             return b
 
         list_of_masks = []
-        sample_size = math.ceil(sparsity*max_length)
+        sample_size = math.ceil(sparsity*max_length) # not n, but length of explanation = sum(mask)
         space_size = binomial(max_length, sample_size)
         
-        if space_size < 100000:
+        if space_size < 100000:            
             list_of_masks = self.all_binary_masks(max_length, sample_size, search_space)
             np.random.shuffle(list_of_masks)
             list_of_masks = list_of_masks[:num_masks]

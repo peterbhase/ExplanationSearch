@@ -112,7 +112,7 @@ For evaluating the explanations methods, you can for example run the experiment 
 
 `python run_tasks.py --gpu GPU --experiment parallel_local_search --seeds 10 `
 
-See scripts for the other methods in `src/scripts`.
+See scripts for the other methods in `src/scripts`. All data is included in this repository except for SNLI; download `esnli_flat` from [ERASER](https://www.eraserbenchmark.com/).
 
 To compute CIs and hypohesis tests for all of the evaluation results, run
 

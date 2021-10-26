@@ -32,6 +32,7 @@ class PLSScript(BaseScript):
         parser.add_argument('--temp_decay', type=float, help="temp decay in SA")
         parser.add_argument('--eval_only', action='store_true')
         parser.add_argument('--save_all_metrics', action='store_true')
+        parser.add_argument('--use_last', default=False, action='store_true')
         parser.add_argument('--search_space', type=str, choices=['exact_k', 'up_to_k'], help='max sparsity of mask space to search over')
 
 
@@ -52,7 +53,7 @@ class PLSScript(BaseScript):
         data, vocab = self.read_data(args, reader)
         data_loader = PyTorchDataLoader(data, batch_size=1, shuffle=False)
         task_model = self.init_task_model(args, vocab)
-        task_model = self.load_task_model(args, task_model)  
+        task_model = self.load_task_model(args, task_model, use_last=args.use_last)  
 
         best_mask_dict = {}
         all_suff_metrics_dict = {sparsity : {} for sparsity in self.sparsity_list}
@@ -68,7 +69,6 @@ class PLSScript(BaseScript):
         if args.eval_only:
             assert os.path.exists(masks_path)
             best_masks = json.load(open(masks_path))
-            sparsity_strs = ['0.05', '0.1', '0.2', '0.5']
 
         with torch.no_grad():
             task_model.eval()
@@ -100,7 +100,6 @@ class PLSScript(BaseScript):
                         # flip mask if comp since sparsity always <= .5 (will be flipped in base_script)
                         if objective == 'comp':
                             mask = 1-mask
-
                         # split handles batching if too many parallel SA to fit into memory
                         num_batches = max(1,math.ceil(args.num_restarts / args.batch_size))
                         masks = np.array_split(mask, indices_or_sections=num_batches)
@@ -141,7 +140,7 @@ class PLSScript(BaseScript):
                                 restarts=args.num_restarts, # num parallel runs
                                 temp_decay=args.temp_decay,
                                 search_space=args.search_space,
-                                no_duplicates=True)                        
+                                no_duplicates=True)
 
                             start = time.time()
                             masks, obj_values, obj_woe_values = search_class.run()
@@ -151,7 +150,6 @@ class PLSScript(BaseScript):
                             if args.search_space == 'up_to_k': assert (sum(best_mask[0]) <= math.ceil(doc_length*sparsity))
                             if args.search_space == 'exact_k': assert (sum(best_mask[0]) == math.ceil(doc_length*sparsity))
 
-                            start = time.time()
                             min_suff, max_comp = self.update_search_metrics(
                                 args, task_model, batch, sparsity, best_mask, objective=objective)
                             if args.method=='SA':

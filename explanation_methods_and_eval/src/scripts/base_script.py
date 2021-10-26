@@ -185,13 +185,13 @@ class BaseScript:
 
         return task_model
 
-    def load_task_model(self, args, task_model):
+    def load_task_model(self, args, task_model, use_last=False):
         if args.dataset in ['cose_short']:
             data_folder = 'cose'
         else:
             data_folder = args.dataset
-
-        weights_path = f'outputs/task_model/{data_folder}/{args.task_model_exp_name}/best.th'
+        name = 'best' if not use_last else 'model_state_epoch_4'
+        weights_path = f'outputs/task_model/{data_folder}/{args.task_model_exp_name}/{name}.th'
         task_model.load_state_dict(torch.load(weights_path))
 
         return task_model
@@ -531,7 +531,6 @@ class BaseScript:
         for k, v in document['task'].items():
             batch_document['task'][k] = torch.cat([document['task'][k] for i in range(batch_size)], dim=0)
         batch_label = torch.cat([label for i in range(batch_size)], dim=0)
-
         return batch_document, batch_label
 
     def run(self):

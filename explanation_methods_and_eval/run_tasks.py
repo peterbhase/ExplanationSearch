@@ -5,9 +5,9 @@ import argparse
 def task_model(args):
     for seed in seeds:
         for model in ['bert-base-uncased']:
-            for data in ['boolq_raw']:
+            for data in ['sst2']:
             # for data in ['boolq_raw', 'fever', 'multirc', 'esnli_flat', 'sst2', 'evidence_inference']:  
-                for masking in [0, 1]:
+                for masking in [0]:
                     masking_str='_masked' if masking else ''
                     _masking='--masking_augmentation' if masking else ''
                     if data == 'esnli_flat':
@@ -21,6 +21,24 @@ def task_model(args):
                               f"--task_model_name {model} --dataset {data} --exp_name {e_name} --lr 1e-5 {_masking} "
                               f"{data_addin} {small_data_addin} --seed {seed} "
                     )
+
+def exact_counterfactual_training(args):
+    for seed in seeds:
+        for model in ['bert-base-uncased']:
+            for data in ['esnli_flat', 'sst2']:
+                masking_str='_exact-CT'
+                _masking='--masking_augmentation --PLS_masks ' 
+                if data == 'esnli_flat':
+                    n = 50000
+                else:
+                    n = -1
+                e_name = f"{model[:9]}{masking_str}_sd{seed}"
+                n_epochs = 5 # see allennlp.training.trainer for PLS_masks args
+                data_addin = f'--num_datapoints {n}' if n > 0 else ''
+                os.system(f"PYTHONPATH=./:$PYTHONPATH python src/scripts/task_script.py --cuda_device {args.gpu} --batch_size 4 --num_epochs {n_epochs} "
+                          f"--task_model_name {model} --dataset {data} --exp_name {e_name} --lr 1e-5 {_masking} "
+                          f"{data_addin} {small_data_addin} --seed {seed} "
+                )
 
 def gradient_search(args):
     for seed in seeds:
@@ -62,7 +80,7 @@ def LIME(args):
         # for samples in [250]: #[76, 250]
         for controlled in [1]:
             for model in ['bert-base-uncased']:
-                for data in ['boolq_raw', 'fever', 'multirc', 'esnli_flat', 'sst2', 'evidence_inference']:
+                for data in ['sst2', 'fever', 'multirc', 'esnli_flat', 'boolq_raw', 'evidence_inference']:
                     for masking in [0, 1]:
                       n = 500
                       n_str = n if n > 0 else 'Full'
@@ -80,6 +98,35 @@ def LIME(args):
                           print(f"\nStarting {e_name} on {data}\n")         
                           os.system(f"PYTHONPATH=./:$PYTHONPATH python src/scripts/lime_script.py --cuda_device {args.gpu} "
                                     f"--top_k_selection up_to_k --num_samples {samples} --batch_size 100 --threshold .5 --datasplit test "
+                                    f"--task_model_name {model} --dataset {data} --exp_name {e_name} --task_model_exp_name {task_model} "
+                                    f"{small_data_addin} --seed {seed} "
+                                    f"--num_datapoints {n} {eval_only}"
+                          )
+
+def Anchors(args):
+    for seed in seeds:
+        # controlled=0
+        for controlled in [1]:
+            for model in ['bert-base-uncased']:
+                for data in ['multirc']:
+                # for data in ['boolq_raw', 'fever', 'multirc', 'esnli_flat', 'sst2', 'evidence_inference']:
+                    for masking in [0, 1]:
+                      n = 500
+                      n_str = n if n > 0 else 'Full'
+                      masking_str='_masked' if masking else ''
+                      if controlled:
+                          samples = 996
+                          cc = '_cc'
+                      else:
+                          cc = f'_steps{samples}'
+                      task_model = f"{model[:9]}{masking_str}_sd{seed}"
+                      model_addin = '' if model == 'bert-base-uncased' else f"_{model[:9]}"
+                      e_name = f"anchors{masking_str}_n{n_str}{cc}{model_addin}_sd{seed}"
+                      e_path = os.path.join('outputs', 'anchors', data, 'test', e_name + '_final_result.json')
+                      if not os.path.exists(e_path) or eval_only != "":
+                          print(f"\nStarting {e_name} on {data}\n")
+                          os.system(f"PYTHONPATH=./:$PYTHONPATH python src/scripts/anchors_script.py --cuda_device {args.gpu} "
+                                    f"--num_samples {samples} --datasplit test "
                                     f"--task_model_name {model} --dataset {data} --exp_name {e_name} --task_model_exp_name {task_model} "
                                     f"{small_data_addin} --seed {seed} "
                                     f"--num_datapoints {n} {eval_only}"
@@ -241,14 +288,22 @@ def exhaustive_search(args):
 def parallel_local_search(args):
     for seed in seeds:
         for model in ['bert-base-uncased']:
-            for data in ['boolq_raw', 'fever', 'multirc', 'esnli_flat', 'sst2', 'evidence_inference']:
-                for masking in [0, 1]:
+            for data in ['esnli_flat']:
+            # for data in ['boolq_raw', 'fever', 'multirc', 'esnli_flat', 'sst2', 'evidence_inference']:
+                for masking in [2]:
+                # for masking in [0, 1, 2]:
                     for num_search in [1000]:
                         n = 500
                         num_restarts = 10
                         temp_decay = 0 # update rule is: update state only if proposal is better (no random updating)
                         n_str = n if n > 0 else 'Full'
-                        masking_str='_masked' if masking else ''
+                        if masking == 1:
+                          masking_str='_masked'
+                        if masking == 2:
+                          masking_str='_exact-CT'
+                        else:
+                          masking_str = ''
+                        use_last = '' if masking != 2 else '--use_last ' # use last model, not best val epoch, for exact-CT
                         task_model = f"{model[:9]}{masking_str}_sd{seed}"
                         model_addin = '' if model == 'bert-base-uncased' else f"_{model[:9]}"
                         e_name = f"PLS{masking_str}_n{n_str}_search{num_search}{model_addin}_sd{seed}"
@@ -259,10 +314,9 @@ def parallel_local_search(args):
                                       f" --num_to_search {num_search} --batch_size 10 --datasplit test "
                                       f"--task_model_name {model} --dataset {data} --exp_name {e_name} --task_model_exp_name {task_model} "
                                       f"{small_data_addin} --seed {seed} "
-                                      f"--num_restarts {num_restarts} --temp_decay {temp_decay} --search_space exact_k "
+                                      f"--num_restarts {num_restarts} --temp_decay {temp_decay} --search_space exact_k {use_last} "
                                       f"--num_datapoints {n} --save_all_metrics "
                             )
-
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -288,8 +342,10 @@ if __name__ == "__main__":
 
     # experiments
     if args.experiment == 'task_model': task_model(args)
+    if args.experiment == 'exact_counterfactual_training': exact_counterfactual_training(args)
     if args.experiment == 'gradient_search': gradient_search(args)
     if args.experiment == 'LIME': LIME(args)
+    if args.experiment == 'anchors': Anchors(args)
     if args.experiment == 'integrated_gradients': integrated_gradients(args)
     if args.experiment == 'ordered_search': ordered_search(args)
     if args.experiment == 'hotflip': hotflip(args)

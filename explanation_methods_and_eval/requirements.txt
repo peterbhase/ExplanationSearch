@@ -1,5 +1,6 @@
 -e explanation_methods_and_eval/transformers/
 -e explanation_methods_and_eval/allennlp/
+-e explanation_methods_and_eval/anchor/
 numpy
 pandas
 scikit-learn

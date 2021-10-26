@@ -7,6 +7,8 @@ import time
 import traceback
 from contextlib import contextmanager
 from typing import Any, Dict, Iterator, List, Optional, Tuple, Union
+import copy
+from copy import deepcopy
 
 from allennlp.common.util import int_to_device
 
@@ -33,6 +35,8 @@ from allennlp.training.momentum_schedulers import MomentumScheduler
 from allennlp.training.moving_average import MovingAverage
 from allennlp.training.optimizers import Optimizer
 from allennlp.training.tensorboard_writer import TensorboardWriter
+
+from src.models.parallel_local_search import PLSExplainer
 
 logger = logging.getLogger(__name__)
 
@@ -374,6 +378,7 @@ class GradientDescentTrainer(Trainer):
         num_gradient_accumulation_steps: int = 1,
         use_amp: bool = False,
         masking_augmentation: bool = False,
+        PLS_masks: bool = False,
     ) -> None:
         super().__init__(serialization_dir, cuda_device, distributed, local_rank, world_size)
 
@@ -385,6 +390,7 @@ class GradientDescentTrainer(Trainer):
         self._validation_data_loader = validation_data_loader
         self.optimizer = optimizer
         self.masking_augmentation = masking_augmentation
+        self.PLS_masks = PLS_masks
 
         if patience is None:  # no early stopping
             if validation_data_loader is not None:
@@ -485,7 +491,24 @@ class GradientDescentTrainer(Trainer):
             array = torch.cat([array, padding], dim=-1)
         return array
 
-    def batch_outputs(self, batch: TensorDict, for_training: bool, masking_augmentation: bool) -> Dict[str, torch.Tensor]:
+    def stack_input(self, document, label, batch_size):
+        '''Vertically stack input batch_size number of times.'''
+        batch_document = copy.deepcopy(document)
+        batch_document['task'] = {}
+        for k, v in document['task'].items():
+            batch_document['task'][k] = torch.cat([document['task'][k] for i in range(batch_size)], dim=0)
+        batch_label = torch.cat([label for i in range(batch_size)], dim=0)
+        return batch_document, batch_label
+
+    def np_woe(self, p):
+        return np.log(p / (1-p))
+
+    def pad_seq(self, seq, max_len):
+        while len(seq) < max_len:
+            seq.append(0)
+        return seq
+
+    def batch_outputs(self, batch: TensorDict, for_training: bool, masking_augmentation: bool = False, PLS_masks: bool = False) -> Dict[str, torch.Tensor]:
         """
         Does a forward pass on the given batch and returns the output dictionary that the model
         returns, after adding any specified regularization penalty to the loss (if training).
@@ -495,18 +518,91 @@ class GradientDescentTrainer(Trainer):
         if masking_augmentation:
             masking_prop = np.random.choice([.5, .8, .9, .95], size=1).item()
             bs = batch['document']['task']['mask'].size(0)
-            attention_mask = batch['document']['task']['mask'].clone().float()  
-            seq_lens = attention_mask.sum(-1)
-            max_len = attention_mask.size(-1)
-            where_special_idx = [torch.where(seq)[0] for seq in batch['always_keep_mask']] # special tokens AND query tokens, which should never be masked
-            input_mask = [self.random_mask(size=int(seq_lens[i].item()), prop=masking_prop, pad_to=max_len, ignore_positions=where_special_idx[i].cpu().numpy()) for i in range(bs)]
-            input_mask = torch.stack(input_mask).float().to(attention_mask.device) # batch_size x max_seq_len
-            new_attention_mask = attention_mask * input_mask
-            batch['document']['task']['mask'] = attention_mask.bool()
+            attention_mask = batch['document']['task']['mask'].clone().float()
+            if not PLS_masks:
+                # use where_special_idx to avoid masking unmaskable tokens
+                where_special_idx = [torch.where(seq)[0] for seq in batch['always_keep_mask']] # special tokens AND query tokens, which should never be masked
+                seq_lens = attention_mask.sum(-1)
+                max_len = attention_mask.size(-1)                
+                input_mask = [self.random_mask(size=int(seq_lens[i].item()), prop=masking_prop, pad_to=max_len, ignore_positions=where_special_idx[i].cpu().numpy()) for i in range(bs)]
+                input_mask = torch.stack(input_mask).float().to(self.cuda_device) # batch_size x max_seq_len
+                new_attention_mask = attention_mask * input_mask
+            else:
+                # these seq_lens and max_len differ from above because we ignore unmaskable tokens by the design of the search method and data preprocessing
+                # unmaskable tokens include special tokens and the 'question' in tasks with (evidence, question) inputs
+                seq_lens = [len(batch['metadata'][i]['doc_tokens']) for i in range(bs)]
+                max_len = max(seq_lens)
+                input_mask = []
+                self._pytorch_model.eval()
+                with torch.no_grad():
+                    full_output_dict = self._pytorch_model(**batch)
+                    orig_pred_probs = full_output_dict['predicted_prob']
+                    orig_pred_labels = full_output_dict['predicted_label']
+                    for idx, seq_len in enumerate(seq_lens):
+                        objective = np.random.choice(['suff','comp'])
+                        doc_length = seq_len
+                        orig_pred_prob = orig_pred_probs[idx].item()
+                        orig_pred_label = orig_pred_labels[idx].reshape(1)
+                        single_point_doc = {}
+                        for k,v in batch['document'].items():
+                            if type(v) is torch.tensor:
+                                single_point_doc[k] = v[idx].reshape(1,-1)                            
+                            elif type(v) is dict:
+                                single_point_doc[k] = {}
+                                for k2,v2 in v.items():
+                                    single_point_doc[k][k2] = v2[idx].reshape(1,-1)                                       
+                            elif type(v) is list:
+                                single_point_doc[k] = [v[idx]]
+                        # define objective function here to give to search_class below
+                        def objective_function(mask):
+                            if objective == 'comp':
+                                mask = 1-mask
+                            search_bs = 10
+                            num_batches = max(1,math.ceil(10 / search_bs))
+                            masks = np.array_split(mask, indices_or_sections=num_batches)
+                            obj_vals, obj_val_woes = [], []
+                            for mask in masks:
+                                stacked_input, stacked_label = self.stack_input(document=single_point_doc, label=orig_pred_label, batch_size=mask.shape[0])
+                                doc_mask_tensor = torch.tensor(mask)
+                                stacked_input["task"]["mask"][:, 1:(doc_length+1)] = doc_mask_tensor
+                                start = time.time()
+                                output_dict = self._pytorch_model(document=stacked_input, label=stacked_label)
+                                # print(f"SA {(time.time()-start):.4f} forward time ")
+                                pred_prob = output_dict['label_prob'].cpu().numpy()
+                                if objective == 'suff':
+                                    obj_val = orig_pred_prob - pred_prob
+                                    obj_val_woe = self.np_woe(orig_pred_prob) - self.np_woe(pred_prob)
+                                if objective == 'comp':
+                                    obj_val = -(orig_pred_prob - pred_prob)
+                                    obj_val_woe = -(self.np_woe(orig_pred_prob) - self.np_woe(pred_prob))
+                                obj_vals.append(obj_val)
+                                obj_val_woes.append(obj_val_woe)
+                            obj_val = np.concatenate(obj_vals).reshape(-1)
+                            obj_val_woe = np.concatenate(obj_val_woes).reshape(-1)
+                            return obj_val, obj_val_woe
+                        search_class = PLSExplainer(
+                                        objective_function=objective_function, 
+                                        target_sparsity=masking_prop, 
+                                        eval_budget=250,
+                                        dimensionality=doc_length,
+                                        restarts=10, # num parallel runs
+                                        temp_decay=0,
+                                        search_space='exact_k',
+                                        no_duplicates=True)
+                        masks, obj_values, obj_woe_values = search_class.run()
+                        mask_list = masks.tolist()
+                        best_mask = mask_list[-1]
+                        input_mask.append(best_mask)
+                # make new attention mask
+                new_attention_mask = batch['document']["task"]["mask"].clone()
+                for idx, mask in enumerate(input_mask): 
+                    new_attention_mask[idx, 1:(seq_lens[idx]+1)] = torch.tensor(mask)
+            self._pytorch_model.train()            
+            # batch['document']['task']['mask'] = attention_mask.bool()
             # now double the input with the masked version
             token_ids, type_ids = batch['document']['task']['token_ids'], batch['document']['task']['type_ids']
             always_keep_mask = batch['always_keep_mask']
-            labels = always_keep_mask = batch['label']
+            labels = batch['label']
             batch['document']['task']['token_ids'] = torch.cat((token_ids, token_ids), dim=0)
             batch['document']['task']['type_ids'] = torch.cat((type_ids, type_ids), dim=0)
             batch['document']['task']['mask'] = torch.cat((attention_mask, new_attention_mask), dim=0)
@@ -622,7 +718,9 @@ class GradientDescentTrainer(Trainer):
             batch_group_outputs = []
             for _, batch in enumerate(batch_group):
                 with amp.autocast(self._use_amp):
-                    batch_outputs = self.batch_outputs(batch, for_training=True, masking_augmentation=self.masking_augmentation)
+                    batch_outputs = self.batch_outputs(batch, for_training=True, 
+                        masking_augmentation=self.masking_augmentation, 
+                        PLS_masks=self.PLS_masks if epoch >= 4 else False)
                     batch_group_outputs.append(batch_outputs)
                     loss = batch_outputs.get("loss")
                     reg_loss = batch_outputs.get("reg_loss")

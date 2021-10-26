@@ -30,6 +30,7 @@ class TaskScript(BaseScript):
         parser.add_argument('--batch_size', type=int)
         parser.add_argument('--eval_only', action='store_true')
         parser.add_argument('--masking_augmentation', action='store_true')
+        parser.add_argument('--PLS_masks', action='store_true')
 
     @overrides
     def init_base_dir(self, args):
@@ -66,6 +67,7 @@ class TaskScript(BaseScript):
             grad_norm=100.,
             grad_clipping=None,
             masking_augmentation=args.masking_augmentation,
+            PLS_masks=args.PLS_masks
         )
         trainer.train()
         task_model.load_state_dict(torch.load(os.path.join(serialization_dir, 'best.th')))
