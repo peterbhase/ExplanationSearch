@@ -1,4 +1,4 @@
-# Search Methods for Sufficient, Socially-Aligned Feature Importance Explanations with In-Distribution Counterfactuals
+# The Out-of-Distribution Problem in Explainability and Search Methods for Feature Importance Explanations
 
 This is the repository for the paper [here](https://arxiv.org/abs/2106.00786), including code for measuring OOD-ness of explanation counterfactuals and several new search methods for identifying explanations.
 
